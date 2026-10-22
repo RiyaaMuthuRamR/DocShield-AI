@@ -1,0 +1,95 @@
+﻿import { useMemo, useState } from 'react';
+import { Activity, AlertTriangle, ArrowDownToLine, ArrowUpRight, BadgeCheck, FileCheck2, FileImage, FileSearch, LoaderCircle, ScanSearch, Shield, ShieldAlert, ShieldCheck, UploadCloud } from 'lucide-react';
+import Metric from './components/Metric.jsx';
+import { analyzeDocument, generateReport, reportDownloadUrl } from './services/api';
+
+function statusTone(status = '') {
+  const text = status.toLowerCase();
+  if (text.includes('high risk') || text.includes('mismatch')) return 'danger';
+  if (text.includes('review') || text.includes('partial') || text.includes('uncertain')) return 'warning';
+  return 'good';
+}
+
+export default function App() {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState('');
+  const [result, setResult] = useState(null);
+  const [reportUrl, setReportUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const ocr = result?.ocr?.structured_data;
+  const forgery = result?.forgery;
+  const risk = result?.risk;
+  const riskTone = useMemo(() => statusTone(risk?.status), [risk?.status]);
+
+  function chooseFile(nextFile) {
+    setFile(nextFile || null); setResult(null); setReportUrl(''); setError('');
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(nextFile ? URL.createObjectURL(nextFile) : '');
+  }
+
+  async function runScreening(event) {
+    event.preventDefault();
+    if (!file) { setError('Choose a document image first.'); return; }
+    setBusy(true); setError(''); setResult(null); setReportUrl('');
+    try { setResult(await analyzeDocument(file)); }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  }
+
+  async function makeReport() {
+    if (!result) return;
+    setReportBusy(true); setError('');
+    try {
+      const response = await generateReport({
+        ocr: ocr || { name: '', dob: '', document_number: '' },
+        forgery: { confidence: forgery?.confidence ?? 0, metadata_status: result.metadata_status || 'Unknown' },
+        risk: { overall_risk: risk?.overall_risk ?? 0, status: risk?.status ?? 'NEEDS REVIEW', reasons: risk?.reasons || [] },
+      });
+      setReportUrl(reportDownloadUrl(response.download_url));
+    } catch (err) { setError(err.message); }
+    finally { setReportBusy(false); }
+  }
+
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <a className="brand" href="#top"><span className="brand-mark"><ShieldCheck size={24}/></span><span><b>DocShield</b><small>AI SCREENING</small></span></a>
+      <div className="sidebar-label">WORKSPACE</div>
+      <button className={`nav-item ${activeTab === 'screen' ? 'selected' : ''}`} onClick={() => setActiveTab('screen')}><ScanSearch size={18}/> Document screening</button>
+      <div className="sidebar-bottom"><div className="sidebar-status"><span className="status-dot"/><span><b>Prototype mode</b><small>Human review required</small></span></div><p>DOCSHIELD AI Â· MVP</p></div>
+    </aside>
+
+    <main id="top" className="main-content">
+      <header className="topbar"><div><span className="breadcrumb">Workspace /</span> <b>Document screening</b></div><span className="topbar-chip"><Activity size={15}/> Screening assistance</span></header>
+      {<>
+        <section className="hero"><div><p className="eyebrow">IDENTITY DOCUMENT INTELLIGENCE</p><h1>Screen documents.<br/><span>Surface the signals.</span></h1><p className="hero-copy">Extract visible fields, inspect image-compression signals, and assemble a review-ready screening summary â€” in one workflow.</p><div className="hero-note"><Shield size={16}/> Decision support only. Final verification remains with an authorized reviewer.</div></div><div className="hero-art"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="hero-shield"><ShieldCheck size={64} strokeWidth={1.4}/></div><div className="float-card float-card-top"><span className="mini-icon"><FileSearch size={17}/></span><span><b>OCR extraction</b><small>Text & fields</small></span></div><div className="float-card float-card-bottom"><span className="mini-icon mini-icon-green"><BadgeCheck size={17}/></span><span><b>Risk signals</b><small>Explainable output</small></span></div></div></section>
+
+        <div className="section-heading workspace-heading"><div><p className="eyebrow">ANALYSIS WORKSPACE</p><h2>New document screening</h2><p className="muted">Upload one document image to start the pipeline.</p></div><span className="step-pill"><span>01</span> Upload <i/> <span>02</span> Analyze <i/> <span>03</span> Report</span></div>
+        <section className="panel upload-panel"><form onSubmit={runScreening}>
+          <label className={`dropzone ${file ? 'has-file' : ''}`} htmlFor="document-file"><input id="document-file" type="file" accept="image/jpeg,image/png,image/webp,image/bmp" onChange={(e) => chooseFile(e.target.files?.[0])}/>
+            {preview ? <img className="image-preview" src={preview} alt="Selected document preview"/> : <span className="upload-symbol"><UploadCloud size={26}/></span>}
+            <span className="drop-title">{file ? file.name : 'Drop a document image here'}</span><span className="drop-subtitle">{file ? `${(file.size / 1024).toFixed(0)} KB Â· Ready to analyze` : 'or click to browse Â· JPG, PNG, WEBP Â· max 10 MB'}</span>
+            {file && <span className="change-file">Choose another image</span>}
+          </label>
+          <div className="upload-actions"><div className="privacy-note"><ShieldCheck size={17}/><span><b>Local prototype storage</b><small>Uploads are stored in your backend folder. Use synthetic demo documents only.</small></span></div><button className="primary-button" disabled={busy || !file} type="submit">{busy ? <><LoaderCircle size={17} className="spin"/> Analyzingâ€¦</> : <><ScanSearch size={17}/> Run screening <ArrowUpRight size={17}/></>}</button></div>
+        </form></section>
+
+        {error && <div className="error-box"><AlertTriangle size={18}/><span>{error}</span></div>}
+        {result && <section className="results-area">
+          <div className="section-heading result-heading"><div><p className="eyebrow">SCREENING OUTPUT</p><h2>Analysis results</h2><p className="muted">{result.filename} Â· Results may be incomplete if OCR dependencies are unavailable.</p></div><span className={`result-status ${riskTone}`}>{risk?.status || 'REVIEW'}</span></div>
+          {result.ocr?.error && <div className="warning-box"><AlertTriangle size={17}/><span>OCR did not complete: {result.ocr.error}. Install the dependencies in <code>requirements.txt</code> and retry.</span></div>}
+          <div className="metrics-grid"><Metric label="Overall risk score" value={`${risk?.overall_risk ?? 0}/100`} detail="Heuristic score Â· not probability" tone={riskTone}/><Metric label="ELA indicator" value={`${forgery?.confidence ?? 0}%`} detail={forgery?.risk_level || 'Image-compression signal'} tone="warning"/><Metric label="Fields extracted" value={`${[ocr?.name, ocr?.dob, ocr?.document_number].filter(Boolean).length}/3`} detail="Name Â· DOB Â· document number" tone="neutral"/><Metric label="QR code" value={result.qr?.valid ? 'Detected' : 'Not decoded'} detail={result.qr?.message || 'QR analysis'} tone={result.qr?.valid ? 'good' : 'neutral'}/></div>
+          <div className="results-grid"><section className="panel result-panel"><div className="panel-title"><span className="panel-icon"><FileCheck2 size={18}/></span><div><h3>Extracted fields</h3><p>OCR result</p></div></div><div className="field-result"><span>Full name</span><b>{ocr?.name || 'Not extracted'}</b></div><div className="field-result"><span>Date of birth</span><b>{ocr?.dob || 'Not extracted'}</b></div><div className="field-result"><span>Document number</span><b>{ocr?.document_number || 'Not extracted'}</b></div>{result.ocr?.raw_text?.length > 0 && <details className="raw-text"><summary>View raw OCR text</summary><pre>{result.ocr.raw_text.join('\n')}</pre></details>}</section>
+            <section className="panel result-panel"><div className="panel-title"><span className="panel-icon panel-icon-orange"><FileImage size={18}/></span><div><h3>Image-forensics signals</h3><p>ELA & metadata</p></div></div><div className="field-result"><span>Metadata</span><b>{result.metadata_status || 'Unknown'}</b></div><div className="field-result"><span>ELA indicator</span><b>{forgery?.confidence ?? 'Unavailable'}%</b></div><div className="field-result"><span>Heatmap</span><b>{forgery?.heatmap_url ? 'Generated' : 'Unavailable'}</b></div>{forgery?.heatmap_url && <img className="heatmap-preview" src={reportDownloadUrl(forgery.heatmap_url)} alt="ELA visualization heatmap"/>}<p className="small-disclaimer">ELA can produce false positives and is not proof of tampering. Missing metadata is common and does not establish fraud.</p></section></div>
+          <section className="panel risk-panel"><div className="risk-top"><div className="panel-title"><span className={`panel-icon ${riskTone === 'danger' ? 'panel-icon-red' : 'panel-icon-green'}`}><ShieldAlert size={18}/></span><div><h3>Explainable risk assessment</h3><p>Combined screening indicators</p></div></div><div className="score-display"><strong>{risk?.overall_risk ?? 0}</strong><span>/ 100</span></div></div><div className="risk-track"><span style={{ width: `${risk?.overall_risk ?? 0}%` }} className={`risk-fill ${riskTone}`}/></div><ul className="reason-list">{(risk?.reasons || []).map((reason, index) => <li key={`${reason}-${index}`}><span className="reason-bullet"/>{reason}</li>)}</ul><div className="report-actions"><p><b>Need a shareable record?</b><small>Generate a PDF screening report with extracted fields, signals and caveats.</small></p><button className="secondary-button" onClick={makeReport} disabled={reportBusy}>{reportBusy ? <LoaderCircle size={16} className="spin"/> : <ArrowDownToLine size={16}/>} Generate PDF report</button></div>{reportUrl && <a className="download-link" href={reportUrl} target="_blank" rel="noreferrer"><ArrowDownToLine size={16}/> Download investigation report (PDF)</a>}</section>
+          <div className="method-note"><AlertTriangle size={17}/><p><b>Interpretation note:</b> This prototype does not verify authenticity against official registries. OCR may misread fields; ELA is a heuristic; QR payload decoding does not validate a digital signature. Do not use the score alone to accept or reject a person.</p></div>
+        </section>}
+      </>}
+      <footer className="footer"><span>DocShield AI</span><span>Prototype Â· Human verification required</span></footer>
+    </main>
+  </div>;
+}
+
+
